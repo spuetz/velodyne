@@ -48,7 +48,8 @@ namespace velodyne_rawdata
   void RawData::setParameters(double min_range,
                               double max_range,
                               double view_direction,
-                              double view_width)
+                              double view_width,
+                              bool organize_cloud)
   {
     config_.min_range = min_range;
     config_.max_range = max_range;
@@ -71,6 +72,9 @@ namespace velodyne_rawdata
       config_.min_angle = 0;
       config_.max_angle = 36000;
     }
+    //If 'organized_cloud' is enabled, the cloud will be filled up with NaN vales for
+    //invalid point values, instead of excluding them, to keep the cloud organized.
+    config_.organize_cloud = organize_cloud;
   }
 
   /** Set up for on-line operation. */
@@ -85,6 +89,8 @@ namespace velodyne_rawdata
         std::string pkgPath = ros::package::getPath("velodyne_pointcloud");
         config_.calibrationFile = pkgPath + "/params/64e_utexas.yaml";
       }
+
+    private_nh.param("organize_cloud", config_.organize_cloud, false);
 
     ROS_INFO_STREAM("correction angles: " << config_.calibrationFile);
 
@@ -127,6 +133,18 @@ namespace velodyne_rawdata
 
     for (int i = 0; i < BLOCKS_PER_PACKET; i++) {
 
+      /* skip points which are outside the selected
+       * angle range (min_angle, max_angle)
+       */
+      if ((raw->blocks[i].rotation < config_.min_angle 
+            || raw->blocks[i].rotation > config_.max_angle 
+            || config_.min_angle >= config_.max_angle)
+          && (config_.min_angle <= config_.max_angle 
+            || (raw->blocks[i].rotation > config_.max_angle 
+              && raw->blocks[i].rotation < config_.min_angle))){
+        continue;
+      }
+
       // upper bank lasers are numbered [0..31]
       // NOTE: this is a change from the old velodyne_common implementation
       int bank_origin = 0;
@@ -135,8 +153,11 @@ namespace velodyne_rawdata
         bank_origin = 32;
       }
 
+      // the map is used, only if the organize_cloud feature is activated.
+      std::map<uint16_t, VPoint*> organized_lasers;
+
       for (int j = 0, k = 0; j < SCANS_PER_BLOCK; j++, k += RAW_SCAN_SIZE) {
-        
+
         float x, y, z;
         float intensity;
         uint8_t laser_number;       ///< hardware laser number
@@ -150,128 +171,164 @@ namespace velodyne_rawdata
         union two_bytes tmp;
         tmp.bytes[0] = raw->blocks[i].data[k];
         tmp.bytes[1] = raw->blocks[i].data[k+1];
-        /*condition added to avoid calculating points which are not
-          in the interesting defined area (min_angle < area < max_angle)*/
-        if ((raw->blocks[i].rotation >= config_.min_angle 
-             && raw->blocks[i].rotation <= config_.max_angle 
-             && config_.min_angle < config_.max_angle)
-             ||(config_.min_angle > config_.max_angle 
-             && (raw->blocks[i].rotation <= config_.max_angle 
-             || raw->blocks[i].rotation >= config_.min_angle))){
-          float distance = tmp.uint * DISTANCE_RESOLUTION;
-          distance += corrections.dist_correction;
-  
-          float cos_vert_angle = corrections.cos_vert_correction;
-          float sin_vert_angle = corrections.sin_vert_correction;
-          float cos_rot_correction = corrections.cos_rot_correction;
-          float sin_rot_correction = corrections.sin_rot_correction;
-  
-          // cos(a-b) = cos(a)*cos(b) + sin(a)*sin(b)
-          // sin(a-b) = sin(a)*cos(b) - cos(a)*sin(b)
-          float cos_rot_angle = 
-            cos_rot_table_[raw->blocks[i].rotation] * cos_rot_correction + 
-            sin_rot_table_[raw->blocks[i].rotation] * sin_rot_correction;
-          float sin_rot_angle = 
-            sin_rot_table_[raw->blocks[i].rotation] * cos_rot_correction - 
-            cos_rot_table_[raw->blocks[i].rotation] * sin_rot_correction;
-  
-          float horiz_offset = corrections.horiz_offset_correction;
-          float vert_offset = corrections.vert_offset_correction;
-  
-          // Compute the distance in the xy plane (w/o accounting for rotation)
-          /**the new term of 'vert_offset * sin_vert_angle'
-           * was added to the expression due to the mathemathical
-           * model we used.
+
+        float distance = tmp.uint * DISTANCE_RESOLUTION;
+        distance += corrections.dist_correction;
+
+        float cos_vert_angle = corrections.cos_vert_correction;
+        float sin_vert_angle = corrections.sin_vert_correction;
+        float cos_rot_correction = corrections.cos_rot_correction;
+        float sin_rot_correction = corrections.sin_rot_correction;
+
+        // cos(a-b) = cos(a)*cos(b) + sin(a)*sin(b)
+        // sin(a-b) = sin(a)*cos(b) - cos(a)*sin(b)
+        float cos_rot_angle = 
+          cos_rot_table_[raw->blocks[i].rotation] * cos_rot_correction + 
+          sin_rot_table_[raw->blocks[i].rotation] * sin_rot_correction;
+        float sin_rot_angle = 
+          sin_rot_table_[raw->blocks[i].rotation] * cos_rot_correction - 
+          cos_rot_table_[raw->blocks[i].rotation] * sin_rot_correction;
+
+        float horiz_offset = corrections.horiz_offset_correction;
+        float vert_offset = corrections.vert_offset_correction;
+
+        // Compute the distance in the xy plane (w/o accounting for rotation)
+        /**the new term of 'vert_offset * sin_vert_angle'
+         * was added to the expression due to the mathemathical
+         * model we used.
+         */
+        float xy_distance = distance * cos_vert_angle + vert_offset * sin_vert_angle;
+
+        // Calculate temporal X, use absolute value.
+        float xx = xy_distance * sin_rot_angle - horiz_offset * cos_rot_angle;
+        // Calculate temporal Y, use absolute value
+        float yy = xy_distance * cos_rot_angle + horiz_offset * sin_rot_angle;
+        if (xx < 0) xx=-xx;
+        if (yy < 0) yy=-yy;
+
+        // Get 2points calibration values,Linear interpolation to get distance
+        // correction for X and Y, that means distance correction use
+        // different value at different distance
+        float distance_corr_x = 0;
+        float distance_corr_y = 0;
+        if (corrections.two_pt_correction_available) {
+          distance_corr_x = 
+            (corrections.dist_correction - corrections.dist_correction_x)
+            * (xx - 2.4) / (25.04 - 2.4) 
+            + corrections.dist_correction_x;
+          distance_corr_x -= corrections.dist_correction;
+          distance_corr_y = 
+            (corrections.dist_correction - corrections.dist_correction_y)
+            * (yy - 1.93) / (25.04 - 1.93)
+            + corrections.dist_correction_y;
+          distance_corr_y -= corrections.dist_correction;
+        }
+
+        float distance_x = distance + distance_corr_x;
+        /**the new term of 'vert_offset * sin_vert_angle'
+         * was added to the expression due to the mathemathical
+         * model we used.
+         */
+        xy_distance = distance_x * cos_vert_angle + vert_offset * sin_vert_angle ;
+        ///the expression wiht '-' is proved to be better than the one with '+'
+        x = xy_distance * sin_rot_angle - horiz_offset * cos_rot_angle;
+
+        float distance_y = distance + distance_corr_y;
+        xy_distance = distance_y * cos_vert_angle + vert_offset * sin_vert_angle ;
+        /**the new term of 'vert_offset * sin_vert_angle'
+         * was added to the expression due to the mathemathical
+         * model we used.
+         */
+        y = xy_distance * cos_rot_angle + horiz_offset * sin_rot_angle;
+
+        // Using distance_y is not symmetric, but the velodyne manual
+        // does this.
+        /**the new term of 'vert_offset * cos_vert_angle'
+         * was added to the expression due to the mathemathical
+         * model we used.
+         */
+        z = distance_y * sin_vert_angle + vert_offset*cos_vert_angle;
+
+        /** Use standard ROS coordinate system (right-hand rule) */
+        float x_coord = y;
+        float y_coord = -x;
+        float z_coord = z;
+
+        /** Intensity Calculation */
+
+        float min_intensity = corrections.min_intensity;
+        float max_intensity = corrections.max_intensity;
+
+        intensity = raw->blocks[i].data[k+2];
+
+        float focal_offset = 256 
+          * (1 - corrections.focal_distance / 13100) 
+          * (1 - corrections.focal_distance / 13100);
+        float focal_slope = corrections.focal_slope;
+        intensity += focal_slope * (abs(focal_offset - 256 * 
+              (1 - static_cast<float>(tmp.uint)/65535)*(1 - static_cast<float>(tmp.uint)/65535)));
+        intensity = (intensity < min_intensity) ? min_intensity : intensity;
+        intensity = (intensity > max_intensity) ? max_intensity : intensity;
+
+        /** if the organize point cloud feature is activated
+         * fill up invalid points with NaN values to keep the 
+         * cloud organized and insert the points into a map so sort them
+         */
+        if (config_.organize_cloud) {
+          uint16_t ring = corrections.laser_ring;
+          VPoint* point_ptr = new VPoint;
+          /** The laser values are not ordered, the organized structure 
+           * needs ordered neighbour points. The right order is defined 
+           * by the laser_ring value. First collect each laser point 
+           * and insert them into a map, ordered by the ring number
            */
-          float xy_distance = distance * cos_vert_angle + vert_offset * sin_vert_angle;
-  
-          // Calculate temporal X, use absolute value.
-          float xx = xy_distance * sin_rot_angle - horiz_offset * cos_rot_angle;
-          // Calculate temporal Y, use absolute value
-          float yy = xy_distance * cos_rot_angle + horiz_offset * sin_rot_angle;
-          if (xx < 0) xx=-xx;
-          if (yy < 0) yy=-yy;
-    
-          // Get 2points calibration values,Linear interpolation to get distance
-          // correction for X and Y, that means distance correction use
-          // different value at different distance
-          float distance_corr_x = 0;
-          float distance_corr_y = 0;
-          if (corrections.two_pt_correction_available) {
-            distance_corr_x = 
-              (corrections.dist_correction - corrections.dist_correction_x)
-                * (xx - 2.4) / (25.04 - 2.4) 
-              + corrections.dist_correction_x;
-            distance_corr_x -= corrections.dist_correction;
-            distance_corr_y = 
-              (corrections.dist_correction - corrections.dist_correction_y)
-                * (yy - 1.93) / (25.04 - 1.93)
-              + corrections.dist_correction_y;
-            distance_corr_y -= corrections.dist_correction;
-          }
-  
-          float distance_x = distance + distance_corr_x;
-          /**the new term of 'vert_offset * sin_vert_angle'
-           * was added to the expression due to the mathemathical
-           * model we used.
-           */
-          xy_distance = distance_x * cos_vert_angle + vert_offset * sin_vert_angle ;
-          ///the expression wiht '-' is proved to be better than the one with '+'
-          x = xy_distance * sin_rot_angle - horiz_offset * cos_rot_angle;
-  
-          float distance_y = distance + distance_corr_y;
-          xy_distance = distance_y * cos_vert_angle + vert_offset * sin_vert_angle ;
-          /**the new term of 'vert_offset * sin_vert_angle'
-           * was added to the expression due to the mathemathical
-           * model we used.
-           */
-          y = xy_distance * cos_rot_angle + horiz_offset * sin_rot_angle;
-  
-          // Using distance_y is not symmetric, but the velodyne manual
-          // does this.
-          /**the new term of 'vert_offset * cos_vert_angle'
-           * was added to the expression due to the mathemathical
-           * model we used.
-           */
-          z = distance_y * sin_vert_angle + vert_offset*cos_vert_angle;
-  
-          /** Use standard ROS coordinate system (right-hand rule) */
-          float x_coord = y;
-          float y_coord = -x;
-          float z_coord = z;
-  
-          /** Intensity Calculation */
-  
-          float min_intensity = corrections.min_intensity;
-          float max_intensity = corrections.max_intensity;
-  
-          intensity = raw->blocks[i].data[k+2];
-  
-          float focal_offset = 256 
-                             * (1 - corrections.focal_distance / 13100) 
-                             * (1 - corrections.focal_distance / 13100);
-          float focal_slope = corrections.focal_slope;
-          intensity += focal_slope * (abs(focal_offset - 256 * 
-            (1 - static_cast<float>(tmp.uint)/65535)*(1 - static_cast<float>(tmp.uint)/65535)));
-          intensity = (intensity < min_intensity) ? min_intensity : intensity;
-          intensity = (intensity > max_intensity) ? max_intensity : intensity;
-  
+          organized_lasers[ring] = point_ptr;
+          point_ptr->ring = corrections.laser_ring;
           if (pointInRange(distance)) {
-  
-            // convert polar coordinates to Euclidean XYZ
-            VPoint point;
-            point.ring = corrections.laser_ring;
-            point.x = x_coord;
-            point.y = y_coord;
-            point.z = z_coord;
-            point.intensity = (uint8_t) intensity;
-  
-            // append this point to the cloud
-            pc.points.push_back(point);
-            ++pc.width;
+            point_ptr->x = x_coord;
+            point_ptr->y = y_coord;
+            point_ptr->z = z_coord; 
+            point_ptr->intensity = (uint8_t) intensity;
+          }else{
+            point_ptr->x = nan("");
+            point_ptr->y = nan("");
+            point_ptr->z = nan("");
+            point_ptr->intensity = 0; 
           }
         }
+        // cloud should not be organized
+        else if (pointInRange(distance)) {
+          VPoint point;
+          point.ring = corrections.laser_ring;
+          point.x = x_coord;
+          point.y = y_coord;
+          point.z = z_coord;
+          point.intensity = (uint8_t) intensity;
+
+          // append this point to the cloud
+          pc.points.push_back(point);
+          ++pc.width;
+        }
       }
+      if(config_.organize_cloud){
+        // insert sorted points 
+        for (int j = 0; j < SCANS_PER_BLOCK; j++) {
+          VPoint* point = organized_lasers[j];
+          pc.points.push_back(*point);
+          delete point;
+        }
+        // if the cloud should be organized, we have to increment
+        // the cloud height for every scan row
+        pc.height++;
+      }
+    }
+
+    // set the cloud height
+    if(config_.organize_cloud){
+      pc.width = SCANS_PER_BLOCK;
+    // point cloud height 1 for unorganized clouds.
+    }else{
+      pc.height = 1;
     }
   }
   

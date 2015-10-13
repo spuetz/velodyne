@@ -49,7 +49,7 @@ namespace velodyne_pointcloud
   {
   ROS_INFO("Reconfigure Request");
   data_->setParameters(config.min_range, config.max_range, config.view_direction,
-                       config.view_width);
+                       config.view_width, config.organize_cloud);
   }
 
   /** @brief Callback for raw scan messages. */
@@ -64,7 +64,11 @@ namespace velodyne_pointcloud
     // outMsg's header is a pcl::PCLHeader, convert it before stamp assignment
     outMsg->header.stamp = pcl_conversions::toPCL(scanMsg->header).stamp;
     outMsg->header.frame_id = scanMsg->header.frame_id;
-    outMsg->height = 1;
+    // at the beginning the cloud is empty,
+    // therefore the height and the width are zero
+    // the unpack method should change these parameters
+    outMsg->width = 0;
+    outMsg->height = 0;
 
     // process each packet provided by the driver
     for (size_t i = 0; i < scanMsg->packets.size(); ++i)
