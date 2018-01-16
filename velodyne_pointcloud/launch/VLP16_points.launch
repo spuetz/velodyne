@@ -19,11 +19,11 @@
   <include file="$(find velodyne_driver)/launch/nodelet_manager.launch">
     <arg name="model" value="VLP16"/>
     <arg name="pcap" value="$(arg pcap)"/>
+    <arr name="organize_cloud" value="true"/>
   </include>
 
   <!-- start cloud nodelet -->
   <include file="$(find velodyne_pointcloud)/launch/cloud_nodelet.launch">
-
     <arg name="calibration" value="$(arg calibration)"/>
   </include>
 

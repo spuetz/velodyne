@@ -14,6 +14,7 @@
   <arg name="read_once" default="false" />
   <arg name="read_fast" default="false" />
   <arg name="repeat_delay" default="0.0" />
+  <arg name="organize_cloud" default="false" />
   <arg name="rpm" default="600.0" />
   <arg name="frame_id" default="velodyne" />
   <node pkg="nodelet" type="nodelet" name="driver_nodelet"
@@ -24,7 +25,8 @@
     <param name="read_fast" value="$(arg read_fast)"/>
     <param name="repeat_delay" value="$(arg repeat_delay)"/>
     <param name="rpm" value="$(arg rpm)"/>
+    <param name="organize_cloud" value="$(arg organize_velodyne)"/>
     <param name="frame_id" value="$(arg frame_id)"/>
-  </node>    
+  </node>
 
 </launch>
