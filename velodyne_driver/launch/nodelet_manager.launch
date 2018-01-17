@@ -25,7 +25,7 @@
     <param name="read_fast" value="$(arg read_fast)"/>
     <param name="repeat_delay" value="$(arg repeat_delay)"/>
     <param name="rpm" value="$(arg rpm)"/>
-    <param name="organize_cloud" value="$(arg organize_velodyne)"/>
+    <param name="organize_cloud" value="$(arg organize_cloud)"/>
     <param name="frame_id" value="$(arg frame_id)"/>
   </node>
 
