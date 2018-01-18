@@ -8,7 +8,7 @@
 
   <!-- start nodelet manager and load driver nodelet -->
   <node pkg="nodelet" type="nodelet" name="velodyne_nodelet_manager"
-        args="manager" />
+        args="manager" launch-prefix="xterm -e gdb --args"/>
   <arg name="model" default="64E" />
   <arg name="pcap" default="" />
   <arg name="read_once" default="false" />

@@ -526,26 +526,26 @@ namespace velodyne_rawdata
               ++pc.width;
             }
           }
-          if(config_.organize_cloud){
-            // insert sorted points
-            for (int j = 0; j < VLP16_SCANS_PER_FIRING; j++) {
-              VPoint* point = organized_lasers[j];
-              pc.points.push_back(*point);
-              delete point;
-            }
-            // if the cloud should be organized, we have to increment
-            // the cloud height for every scan row
-            pc.height++;
-          }
-        }
+	}
+	if(config_.organize_cloud){
+		// insert sorted points
+		for (int j = 0; j < VLP16_SCANS_PER_FIRING; j++) {
+			VPoint* point = organized_lasers[j];
+			pc.points.push_back(*point);
+			delete point;
+		}
+		// if the cloud should be organized, we have to increment
+		// the cloud height for every scan row
+		pc.height++;
+	}
 
-        // set the cloud height
-        if(config_.organize_cloud){
-          pc.width = VLP16_SCANS_PER_FIRING;
-        // point cloud height 1 for unorganized clouds.
-        }else{
-          pc.height = 1;
-        }
+      }
+      // set the cloud height
+      if(config_.organize_cloud){
+	      pc.width = VLP16_SCANS_PER_FIRING;
+	      // point cloud height 1 for unorganized clouds.
+      }else{
+	      pc.height = 1;
       }
     }
   }
