@@ -87,7 +87,7 @@ namespace velodyne_rawdata
 
         // have to use something: grab unit test version as a default
         std::string pkgPath = ros::package::getPath("velodyne_pointcloud");
-        config_.calibrationFile = pkgPath + "/params/64e_utexas.yaml";
+        config_.calibrationFile = pkgPath + "/params/VLP16db.yaml";
       }
 
     private_nh.param("organize_cloud", config_.organize_cloud, false);
@@ -528,7 +528,7 @@ namespace velodyne_rawdata
           }
           if(config_.organize_cloud){
             // insert sorted points
-            for (int j = 0; j < SCANS_PER_BLOCK; j++) {
+            for (int j = 0; j < VLP16_SCANS_PER_FIRING; j++) {
               VPoint* point = organized_lasers[j];
               pc.points.push_back(*point);
               delete point;
@@ -541,7 +541,7 @@ namespace velodyne_rawdata
 
         // set the cloud height
         if(config_.organize_cloud){
-          pc.width = SCANS_PER_BLOCK;
+          pc.width = VLP16_SCANS_PER_FIRING;
         // point cloud height 1 for unorganized clouds.
         }else{
           pc.height = 1;
