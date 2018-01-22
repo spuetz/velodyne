@@ -25,6 +25,7 @@
   <!-- start cloud nodelet -->
   <include file="$(find velodyne_pointcloud)/launch/cloud_nodelet.launch">
     <arg name="calibration" value="$(arg calibration)"/>
+    <arg name="organize_cloud" value="true"/>
   </include>
 
 </launch>
